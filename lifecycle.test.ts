@@ -82,6 +82,7 @@ function createHarness() {
 	let editorText = "";
 	let notification = "";
 	let shortcut: RegisteredShortcut | undefined;
+	const themeCalls: Array<[string, string]> = [];
 	const model = { provider: "test", id: "suggestion-model" };
 	const ctx = {
 		hasUI: true,
@@ -99,7 +100,10 @@ function createHarness() {
 		isIdle: () => idle,
 		ui: {
 			theme: {
-				fg: (_color: string, text: string) => text,
+				fg: (color: string, text: string) => {
+					themeCalls.push([color, text]);
+					return text;
+				},
 			},
 			setWidget: (_key: string, value: unknown) => {
 				widget = value;
@@ -157,6 +161,9 @@ function createHarness() {
 		get editorText() {
 			return editorText;
 		},
+		get themeCalls() {
+			return themeCalls;
+		},
 		get notification() {
 			return notification;
 		},
@@ -199,7 +206,12 @@ describe("next-prompt lifecycle", () => {
 		for (const input of ["\x1b/", "\x1bO/", "\x1b[47;3u"]) {
 			harness.terminalInput?.(input);
 			expect(harness.widget).toEqual([
-				"Suggestion: run the focused tests  Alt+/ to accept",
+				"↳ next: run the focused tests  (Alt+/ to accept)",
+			]);
+			expect(harness.themeCalls).toContainEqual(["accent", "↳ next:"]);
+			expect(harness.themeCalls).toContainEqual([
+				"muted",
+				"(Alt+/ to accept)",
 			]);
 		}
 
@@ -270,7 +282,7 @@ describe("next-prompt lifecycle", () => {
 			harness.terminalInput?.(input);
 			vi.advanceTimersByTime(50);
 			expect(harness.widget).toEqual([
-				"Suggestion: run the focused tests  Alt+/ to accept",
+				"↳ next: run the focused tests  (Alt+/ to accept)",
 			]);
 		}
 	});
@@ -295,7 +307,7 @@ describe("next-prompt lifecycle", () => {
 		expect(harness.widget).toBeUndefined();
 		vi.advanceTimersByTime(1);
 		expect(harness.widget).toEqual([
-			"Suggestion: run the focused tests  Alt+/ to accept",
+			"↳ next: run the focused tests  (Alt+/ to accept)",
 		]);
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
@@ -340,13 +352,13 @@ describe("next-prompt lifecycle", () => {
 		second.resolve(suggestionResponse("run the latest tests"));
 		await newRequest;
 		expect(harness.widget).toEqual([
-			"Suggestion: run the latest tests  Alt+/ to accept",
+			"↳ next: run the latest tests  (Alt+/ to accept)",
 		]);
 
 		first.resolve(suggestionResponse("commit the old changes"));
 		await oldRequest;
 		expect(harness.widget).toEqual([
-			"Suggestion: run the latest tests  Alt+/ to accept",
+			"↳ next: run the latest tests  (Alt+/ to accept)",
 		]);
 	});
 });

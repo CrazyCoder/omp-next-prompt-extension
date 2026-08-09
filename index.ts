@@ -108,8 +108,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			[
-				ctx.ui.theme.fg("dim", `Suggestion: ${value}`) +
-					ctx.ui.theme.fg("muted", "  Alt+/ to accept"),
+				`${ctx.ui.theme.fg("accent", "↳ next:")} ${value}  ${ctx.ui.theme.fg("muted", "(Alt+/ to accept)")}`,
 			],
 			{ placement: "belowEditor" },
 		);

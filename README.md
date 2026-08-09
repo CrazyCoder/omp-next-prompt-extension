@@ -5,7 +5,7 @@ A native [Oh My Pi](https://omp.sh) extension that predicts the next instruction
 The extension waits for a terminal `agent_end`, skips automatic continuations and queued follow-ups, asks a configurable low-cost model for one short suggestion, and renders it below the editor.
 
 ```text
-Suggestion: run the focused tests  Alt+/ to accept
+↳ next: run the focused tests  (Alt+/ to accept)
 ```
 
 - **Alt+/** inserts the suggestion into the editor without submitting it.
