@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	mock,
+	test,
+	vi,
+} from "bun:test";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 interface SuggestionResponse {
@@ -27,6 +35,7 @@ type EventHandler = (
 	ctx: unknown,
 ) => Promise<void>;
 type TerminalInputHandler = (data: string) => unknown;
+type CommandHandler = (args: string, ctx: unknown) => Promise<void>;
 
 interface RegisteredShortcut {
 	key: string;
@@ -46,6 +55,7 @@ function deferred<T>(): Deferred<T> {
 	return { promise, resolve };
 }
 
+
 function suggestionResponse(text: string): SuggestionResponse {
 	return {
 		stopReason: "stop",
@@ -64,11 +74,13 @@ function conversationMessages() {
 
 function createHarness() {
 	const handlers: Record<string, EventHandler> = {};
+	const commands: Record<string, CommandHandler> = {};
 	let terminalInput: TerminalInputHandler | undefined;
 	let pendingMessages = false;
 	let idle = true;
 	let widget: unknown;
 	let editorText = "";
+	let notification = "";
 	let shortcut: RegisteredShortcut | undefined;
 	const model = { provider: "test", id: "suggestion-model" };
 	const ctx = {
@@ -98,10 +110,13 @@ function createHarness() {
 					terminalInput = undefined;
 				};
 			},
+			getEditorText: () => editorText,
 			setEditorText: (value: string) => {
 				editorText = value;
 			},
-			notify: () => {},
+			notify: (message: string) => {
+				notification = message;
+			},
 		},
 	};
 	const pi = {
@@ -114,7 +129,12 @@ function createHarness() {
 		) => {
 			shortcut = { key, handler: options.handler };
 		},
-		registerCommand: () => {},
+		registerCommand: (
+			name: string,
+			options: { handler: CommandHandler },
+		) => {
+			commands[name] = options.handler;
+		},
 		on: (event: string, handler: EventHandler) => {
 			handlers[event] = handler;
 		},
@@ -127,6 +147,7 @@ function createHarness() {
 	return {
 		ctx,
 		handlers,
+		commands,
 		get terminalInput() {
 			return terminalInput;
 		},
@@ -135,6 +156,12 @@ function createHarness() {
 		},
 		get editorText() {
 			return editorText;
+		},
+		get notification() {
+			return notification;
+		},
+		set editorText(value: string) {
+			editorText = value;
 		},
 		get shortcut() {
 			return shortcut;
@@ -153,6 +180,10 @@ beforeEach(() => {
 	completeSimple.mockImplementation(async () =>
 		suggestionResponse("run the focused tests"),
 	);
+});
+
+afterEach(() => {
+	vi.useRealTimers();
 });
 
 describe("next-prompt lifecycle", () => {
@@ -195,7 +226,8 @@ describe("next-prompt lifecycle", () => {
 		expect(completeSimple).not.toHaveBeenCalled();
 	});
 
-	test("discards a completion when input arrives during generation", async () => {
+	test("discards a completion only after terminal input changes the editor", async () => {
+		vi.useFakeTimers();
 		const generation = deferred<SuggestionResponse>();
 		completeSimple.mockImplementation(() => generation.promise);
 		const harness = createHarness();
@@ -210,10 +242,78 @@ describe("next-prompt lifecycle", () => {
 		const options = completeSimple.mock.calls[0]?.[2];
 
 		harness.terminalInput?.("x");
+		expect(options?.signal.aborted).toBe(false);
+		harness.editorText = "x";
+		vi.advanceTimersByTime(50);
 		expect(options?.signal.aborted).toBe(true);
 		generation.resolve(suggestionResponse("commit the changes"));
 		await request;
 		expect(harness.widget).toBeUndefined();
+	});
+
+	test("keeps suggestions across focus, mouse, and navigation input", async () => {
+		vi.useFakeTimers();
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+
+		for (const input of [
+			"\x1b[I",
+			"\x1b[O",
+			"\x1b[<0;12;4M",
+			"\x1b[A",
+			"\x1b[Z",
+		]) {
+			harness.terminalInput?.(input);
+			vi.advanceTimersByTime(50);
+			expect(harness.widget).toEqual([
+				"Suggestion: run the focused tests  Alt+/ to accept",
+			]);
+		}
+	});
+
+	test("re-arms the cached suggestion after typed text is deleted", async () => {
+		vi.useFakeTimers();
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+
+		harness.terminalInput?.("x");
+		harness.editorText = "x";
+		vi.advanceTimersByTime(50);
+		expect(harness.widget).toBeUndefined();
+
+		harness.terminalInput?.("\x7f");
+		harness.editorText = "";
+		vi.advanceTimersByTime(2_049);
+		expect(harness.widget).toBeUndefined();
+		vi.advanceTimersByTime(1);
+		expect(harness.widget).toEqual([
+			"Suggestion: run the focused tests  Alt+/ to accept",
+		]);
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+	});
+
+	test("reports why no suggestion was shown", async () => {
+		completeSimple.mockImplementation(async () => suggestionResponse("NONE"));
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+		await harness.handlers.input?.({}, harness.ctx);
+
+		await harness.commands.suggestions?.("status", harness.ctx);
+		expect(harness.notification).toContain(
+			"Last outcome: no usable model output.",
+		);
 	});
 
 	test("keeps the newest suggestion when an older request finishes last", async () => {

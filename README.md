@@ -9,8 +9,9 @@ Suggestion: run the focused tests  Alt+/ to accept
 ```
 
 - **Alt+/** inserts the suggestion into the editor without submitting it.
-- Ordinary terminal input dismisses the suggestion.
-- Stale requests are aborted when input or a newer agent lifecycle event arrives.
+- Focus, mouse, modifier, and navigation input leaves the suggestion visible.
+- Typing or pasting dismisses the suggestion and aborts any in-flight request.
+- Deleting the prompt back to empty re-shows the cached suggestion after two seconds without another model request.
 - Suggestions are disabled in headless sessions and while OMP will continue automatically.
 
 ## Install
@@ -45,6 +46,8 @@ Suggestions start enabled and use OMP's `@smol` model by default.
 /suggestions model reset
 ```
 
+`/suggestions status` includes the last outcome, such as a shown suggestion, an intentional skip, unusable model output, timeout, or failure.
+
 The model can also be selected at startup:
 
 ```bash
@@ -53,7 +56,7 @@ omp --suggestions-model @slow
 
 Or through the `OMP_SUGGESTIONS_MODEL` environment variable. Precedence is CLI flag, environment variable, then `@smol`.
 
-Each eligible completed response adds one model request. Input during generation aborts the request. Output is filtered to one useful 2–12 word instruction and capped at 100 characters.
+Each eligible completed response, including the first user exchange, adds one model request. Output is filtered to one useful 2–12 word instruction and capped at 100 characters.
 
 ## Develop
 

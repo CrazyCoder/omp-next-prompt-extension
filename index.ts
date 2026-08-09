@@ -19,6 +19,8 @@ const ACCEPT_INPUTS: Record<string, true> = {
 	"\x1b[47;3u": true,
 };
 const GENERATION_TIMEOUT_MS = 20_000;
+const EDITOR_SETTLE_MS = 50;
+const REARM_DELAY_MS = 2_000;
 const SYSTEM_PROMPT = `[SUGGESTION MODE: Suggest what the user might naturally type next into the coding assistant.]
 
 FIRST: Look at the user's recent messages and original request.
@@ -61,27 +63,48 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	let defaultModelSpec = "@smol";
 	let modelSpec = defaultModelSpec;
 	let suggestion: string | undefined;
+	let lastSuggestion: string | undefined;
 	let generation = 0;
 	let generationAbort: AbortController | undefined;
+	let editorCheckTimer: ReturnType<typeof setTimeout> | undefined;
+	let rearmTimer: ReturnType<typeof setTimeout> | undefined;
 	let unsubscribeTerminalInput: (() => void) | undefined;
+	let lastOutcome = "not generated yet";
 
 	pi.setLabel("Next-prompt suggestions");
 
 	function clearSuggestion(
 		ctx: ExtensionContext,
-		abortGeneration = true,
+		options: {
+			abortGeneration?: boolean;
+			forgetLast?: boolean;
+			outcome?: string;
+		} = {},
 	): void {
+		const {
+			abortGeneration = true,
+			forgetLast = true,
+			outcome,
+		} = options;
 		generation += 1;
 		suggestion = undefined;
 		ctx.ui.setWidget(WIDGET_KEY, undefined);
+		if (editorCheckTimer) clearTimeout(editorCheckTimer);
+		if (rearmTimer) clearTimeout(rearmTimer);
+		editorCheckTimer = undefined;
+		rearmTimer = undefined;
+		if (forgetLast) lastSuggestion = undefined;
 		if (abortGeneration) {
 			generationAbort?.abort();
 			generationAbort = undefined;
 		}
+		if (outcome) lastOutcome = outcome;
 	}
 
 	function showSuggestion(ctx: ExtensionContext, value: string): void {
 		suggestion = value;
+		lastSuggestion = value;
+		lastOutcome = `shown: ${value}`;
 		ctx.ui.setWidget(
 			WIDGET_KEY,
 			[
@@ -90,6 +113,57 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			],
 			{ placement: "belowEditor" },
 		);
+	}
+
+	function isKnownNonEditingInput(data: string): boolean {
+		return (
+			data === "\x1b[I" ||
+			data === "\x1b[O" ||
+			data === "\x1b[200~" ||
+			data === "\x1b[201~" ||
+			/^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data)
+		);
+	}
+
+	function scheduleEditorCheck(
+		ctx: ExtensionContext,
+		editorTextBefore: string,
+	): void {
+		if (editorCheckTimer) clearTimeout(editorCheckTimer);
+		editorCheckTimer = setTimeout(() => {
+			editorCheckTimer = undefined;
+			const editorTextAfter = ctx.ui.getEditorText();
+			if (editorTextBefore.length === 0) {
+				if (editorTextAfter.length === 0) return;
+				const outcome = generationAbort
+					? "aborted: editor changed"
+					: "dismissed: editor changed";
+				clearSuggestion(ctx, { forgetLast: false, outcome });
+				return;
+			}
+			if (
+				editorTextAfter.length > 0 ||
+				!lastSuggestion ||
+				!enabled ||
+				!ctx.isIdle() ||
+				ctx.hasPendingMessages()
+			)
+				return;
+			const cached = lastSuggestion;
+			if (rearmTimer) clearTimeout(rearmTimer);
+			rearmTimer = setTimeout(() => {
+				rearmTimer = undefined;
+				if (
+					lastSuggestion !== cached ||
+					ctx.ui.getEditorText().length > 0 ||
+					!enabled ||
+					!ctx.isIdle() ||
+					ctx.hasPendingMessages()
+				)
+					return;
+				showSuggestion(ctx, cached);
+			}, REARM_DELAY_MS);
+		}, EDITOR_SETTLE_MS);
 	}
 
 	pi.registerShortcut(ACCEPT_SHORTCUT, {
@@ -121,7 +195,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			}
 			if (action === "status") {
 				ctx.ui.notify(
-					`Next-prompt suggestions are ${enabled ? "enabled" : "disabled"}. Model: ${modelSpec}.`,
+					`Next-prompt suggestions are ${enabled ? "enabled" : "disabled"}. Model: ${modelSpec}. Last outcome: ${lastOutcome}.`,
 					"info",
 				);
 				return;
@@ -170,9 +244,24 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		modelSpec = defaultModelSpec;
 		unsubscribeTerminalInput?.();
 		unsubscribeTerminalInput = ctx.ui.onTerminalInput((data) => {
-			if ((!suggestion && !generationAbort) || ACCEPT_INPUTS[data])
+			if (
+				(!suggestion && !generationAbort && !lastSuggestion) ||
+				ACCEPT_INPUTS[data] ||
+				isKnownNonEditingInput(data)
+			)
 				return undefined;
-			clearSuggestion(ctx);
+			const editorTextBefore = ctx.ui.getEditorText();
+			if (editorTextBefore.length === 0) {
+				scheduleEditorCheck(ctx, editorTextBefore);
+				return undefined;
+			}
+			clearSuggestion(ctx, {
+				forgetLast: false,
+				outcome: generationAbort
+					? "aborted: editor changed"
+					: "dismissed: editor changed",
+			});
+			scheduleEditorCheck(ctx, editorTextBefore);
 			return undefined;
 		});
 	});
@@ -186,18 +275,35 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("agent_end", async (event, ctx) => {
-		if (
-			!enabled ||
-			!ctx.hasUI ||
-			event.willContinue ||
-			ctx.hasPendingMessages()
-		)
+		if (!enabled) {
+			lastOutcome = "skipped: disabled";
 			return;
+		}
+		if (!ctx.hasUI) {
+			lastOutcome = "skipped: no interactive UI";
+			return;
+		}
+		if (event.willContinue) {
+			lastOutcome = "skipped: agent will continue";
+			return;
+		}
+		if (ctx.hasPendingMessages()) {
+			lastOutcome = "skipped: queued message";
+			return;
+		}
+		if (ctx.ui.getEditorText().length > 0) {
+			lastOutcome = "skipped: editor is not empty";
+			return;
+		}
 		const suggestionContext = buildSuggestionContext(event.messages);
-		if (!suggestionContext) return;
+		if (!suggestionContext) {
+			lastOutcome = "skipped: no eligible completed assistant turn";
+			return;
+		}
 		const model =
 			modelSpec === "current" ? ctx.model : ctx.models.resolve(modelSpec);
 		if (!model) {
+			lastOutcome = `skipped: model "${modelSpec}" is unavailable`;
 			pi.logger.debug(
 				`Next-prompt suggestion skipped: model "${modelSpec}" is unavailable`,
 			);
@@ -205,6 +311,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		}
 
 		clearSuggestion(ctx);
+		lastOutcome = "generating";
 		const requestGeneration = generation;
 		const controller = new AbortController();
 		generationAbort = controller;
@@ -234,18 +341,34 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 					signal,
 				},
 			);
-			if (
-				requestGeneration !== generation ||
-				response.stopReason !== "stop" ||
-				!enabled ||
-				!ctx.isIdle() ||
-				ctx.hasPendingMessages()
-			)
+			if (requestGeneration !== generation || !enabled) return;
+			if (response.stopReason !== "stop") {
+				lastOutcome = `no usable model output: ${response.stopReason}`;
 				return;
+			}
+			if (!ctx.isIdle()) {
+				lastOutcome = "discarded: agent is active";
+				return;
+			}
+			if (ctx.hasPendingMessages()) {
+				lastOutcome = "discarded: queued message";
+				return;
+			}
+			if (ctx.ui.getEditorText().length > 0) {
+				lastOutcome = "discarded: editor changed";
+				return;
+			}
 			const value = normalizeSuggestion(contentText(response.content));
-			if (value) showSuggestion(ctx, value);
+			if (value) {
+				showSuggestion(ctx, value);
+			} else {
+				lastOutcome = "no usable model output";
+			}
 		} catch (error) {
-			if (!signal.aborted) {
+			if (timeoutSignal.aborted && !controller.signal.aborted) {
+				lastOutcome = "timed out";
+			} else if (!signal.aborted) {
+				lastOutcome = "failed";
 				pi.logger.debug("Next-prompt suggestion generation failed", {
 					error: String(error),
 				});

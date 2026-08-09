@@ -156,7 +156,7 @@ export function buildSuggestionContext(
 	}
 
 	if (
-		userMessageCount < 2 ||
+		userMessageCount < 1 ||
 		!lastAssistant ||
 		lastAssistant.stopReason === "error" ||
 		typeof lastAssistant.errorMessage === "string"

@@ -64,14 +64,13 @@ describe("buildSuggestionContext", () => {
 		expect(context?.prompt).not.toContain("tool output");
 	});
 
-	test("waits for a second user exchange and skips failed responses", () => {
-		expect(
-			buildSuggestionContext([
-				{ role: "user", content: "Request" },
-				{ role: "assistant", content: "Tool call" },
-				{ role: "assistant", content: "First answer" },
-			]),
-		).toBeUndefined();
+	test("generates after the first user exchange and skips failed responses", () => {
+		const firstTurn = buildSuggestionContext([
+			{ role: "user", content: "Request" },
+			{ role: "assistant", content: "First answer" },
+		]);
+		expect(firstTurn?.userMessageCount).toBe(1);
+		expect(firstTurn?.prompt).toContain("Assistant: First answer");
 		expect(
 			buildSuggestionContext([
 				{ role: "user", content: "Request" },
