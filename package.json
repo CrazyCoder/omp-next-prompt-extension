@@ -24,7 +24,15 @@
     "verify:package": "npm pack --dry-run --json"
   },
   "omp": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.ts"],
+    "settings": {
+      "renderMode": {
+        "type": "enum",
+        "values": ["widget", "ghost", "both"],
+        "default": "widget",
+        "description": "How next-prompt suggestions are rendered"
+      }
+    }
   },
   "peerDependencies": {
     "@oh-my-pi/pi-ai": "*",

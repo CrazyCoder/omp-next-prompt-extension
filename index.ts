@@ -1,5 +1,6 @@
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { getPluginSettings } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 import { matchesKey } from "@oh-my-pi/pi-tui";
 
 import {
@@ -13,6 +14,8 @@ import {
 	type SuggestionRenderMode,
 } from "./logic";
 
+const PLUGIN_NAME = "@crazycoder/omp-next-prompt-extension";
+const RENDER_MODE_SETTING = "renderMode";
 const WIDGET_KEY = "next-prompt-suggestion";
 const ACCEPT_SHORTCUT = "alt+/";
 const MODEL_FLAG = "suggestions-model";
@@ -58,6 +61,44 @@ Stay silent if the next step isn't obvious from what the user said.
 Format: 2-12 words, match the user's style. Or nothing.
 
 Reply with ONLY the suggestion, no quotes or explanation.`;
+
+async function loadPluginSettings(
+	pi: ExtensionAPI,
+): Promise<Record<string, unknown>> {
+	try {
+		return await getPluginSettings(PLUGIN_NAME, process.cwd());
+	} catch (error) {
+		pi.logger.debug("Failed to load next-prompt plugin settings", {
+			error: String(error),
+		});
+		return {};
+	}
+}
+
+async function persistPluginSetting(
+	pi: ExtensionAPI,
+	key: string,
+	value: string | number | boolean,
+): Promise<string | undefined> {
+	try {
+		const result = await pi.exec("omp", [
+			"plugin",
+			"config",
+			"set",
+			PLUGIN_NAME,
+			key,
+			String(value),
+		]);
+		if (result.code === 0) return undefined;
+		return (
+			result.stderr.trim() ||
+			result.stdout.trim() ||
+			`exit code ${result.code}`
+		);
+	} catch (error) {
+		return String(error);
+	}
+}
 
 export default function nextPromptExtension(pi: ExtensionAPI): void {
 	pi.registerFlag(MODEL_FLAG, {
@@ -277,8 +318,24 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 				}
 				renderMode = requested;
 				renderSuggestion(ctx);
+				const persistenceError = await persistPluginSetting(
+					pi,
+					RENDER_MODE_SETTING,
+					renderMode,
+				);
+				if (persistenceError) {
+					pi.logger.debug("Failed to persist next-prompt plugin setting", {
+						key: RENDER_MODE_SETTING,
+						error: persistenceError,
+					});
+					ctx.ui.notify(
+						`Suggestion render mode set to ${renderMode} for this session, but could not be saved.`,
+						"warning",
+					);
+					return;
+				}
 				ctx.ui.notify(
-					`Suggestion render mode set to ${renderMode}.`,
+					`Suggestion render mode set to ${renderMode} and saved.`,
 					"info",
 				);
 				return;
@@ -297,10 +354,14 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			process.env[MODEL_ENVIRONMENT_VARIABLE],
 		);
 		modelSpec = defaultModelSpec;
+		const pluginSettings = await loadPluginSettings(pi);
 		const renderFlagValue = pi.getFlag(RENDER_MODE_FLAG);
 		defaultRenderMode = configuredRenderMode(
 			typeof renderFlagValue === "string" ? renderFlagValue : undefined,
 			process.env[RENDER_MODE_ENVIRONMENT_VARIABLE],
+			typeof pluginSettings[RENDER_MODE_SETTING] === "string"
+				? pluginSettings[RENDER_MODE_SETTING]
+				: undefined,
 		);
 		renderMode = defaultRenderMode;
 		if (!autocompleteProviderInstalled) {

@@ -59,7 +59,7 @@ Suggestions start enabled, use OMP's `@smol` model, and render as a widget by de
 
 `/suggestions status` includes the last outcome, such as a shown suggestion, an intentional skip, unusable model output, timeout, or failure.
 
-`/suggestions mode` shows or changes the current render mode. The extension registers one wrapper around OMP's native autocomplete provider, so mode changes preserve built-in slash-command and file completion.
+`/suggestions mode` shows or changes the render mode. Changes are saved in OMP's plug-in settings and apply to future sessions. The extension registers one wrapper around OMP's native autocomplete provider, so mode changes preserve built-in slash-command and file completion.
 
 The model and render mode can also be selected at startup:
 
@@ -67,7 +67,7 @@ The model and render mode can also be selected at startup:
 omp --suggestions-model @slow --suggestions-render-mode ghost
 ```
 
-The equivalent environment variables are `OMP_SUGGESTIONS_MODEL` and `OMP_SUGGESTIONS_RENDER_MODE`. Each setting uses the CLI flag first, then its environment variable, then the default (`@smol` or `widget`).
+The equivalent environment variables are `OMP_SUGGESTIONS_MODEL` and `OMP_SUGGESTIONS_RENDER_MODE`. The model uses the CLI flag first, then its environment variable, then `@smol`. The render mode uses the CLI flag first, then its environment variable, then the saved plug-in setting, then `widget`.
 
 Each eligible completed response, including the first user exchange, adds one model request. Output is filtered to one useful 2–12 word instruction and capped at 100 characters.
 

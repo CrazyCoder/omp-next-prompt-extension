@@ -34,6 +34,13 @@ const completeSimple = mock(
 );
 mock.module("@oh-my-pi/pi-ai", () => ({ completeSimple }));
 
+const pluginSettings: Record<string, unknown> = {};
+const getPluginSettings = mock(async () => ({ ...pluginSettings }));
+mock.module(
+	"@oh-my-pi/pi-coding-agent/extensibility/plugins",
+	() => ({ getPluginSettings }),
+);
+
 // Dynamic import is required so Bun installs the pi-ai module mock before index.ts evaluates.
 const { default: registerNextPrompt } = await import("./index");
 
@@ -138,9 +145,16 @@ function createHarness() {
 			},
 		},
 	};
+	const exec = mock(async (_command: string, args: string[]) => {
+		if (args[0] === "plugin" && args[1] === "config" && args[2] === "set") {
+			pluginSettings[args[4]] = args[5];
+		}
+		return { stdout: "", stderr: "", code: 0 };
+	});
 	const pi = {
 		registerFlag: () => {},
 		getFlag: (name: string) => flags[name],
+		exec,
 		setLabel: () => {},
 		registerShortcut: (
 			key: string,
@@ -167,6 +181,7 @@ function createHarness() {
 		ctx,
 		handlers,
 		commands,
+		exec,
 		get terminalInput() {
 			return terminalInput;
 		},
@@ -213,6 +228,8 @@ beforeAll(async () => {
 	await initTheme();
 });
 beforeEach(() => {
+	for (const key of Object.keys(pluginSettings)) delete pluginSettings[key];
+	getPluginSettings.mockClear();
 	completeSimple.mockClear();
 	completeSimple.mockImplementation(async () =>
 		suggestionResponse("run the focused tests"),
@@ -272,6 +289,7 @@ describe("next-prompt lifecycle", () => {
 	test("accepts an inline ghost with Right Arrow", async () => {
 		for (const mode of ["ghost", "both"]) {
 			for (const input of ["\x1b[C", "\x1bOC", "\x1b[1;1C"]) {
+				pluginSettings.renderMode = "widget";
 				const harness = createHarness();
 				await harness.handlers.session_start?.({}, harness.ctx);
 				await harness.handlers.agent_end?.(
@@ -334,6 +352,29 @@ describe("next-prompt lifecycle", () => {
 		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
 			"run the focused tests",
 		);
+	});
+
+	test("persists a render mode selection across extension restarts", async () => {
+		const first = createHarness();
+		await first.handlers.session_start?.({}, first.ctx);
+		await first.commands.suggestions?.("mode ghost", first.ctx);
+
+		expect(first.exec).toHaveBeenCalledWith("omp", [
+			"plugin",
+			"config",
+			"set",
+			"@crazycoder/omp-next-prompt-extension",
+			"renderMode",
+			"ghost",
+		]);
+		expect(first.notification).toBe(
+			"Suggestion render mode set to ghost and saved.",
+		);
+
+		const restarted = createHarness();
+		await restarted.handlers.session_start?.({}, restarted.ctx);
+		await restarted.commands.suggestions?.("status", restarted.ctx);
+		expect(restarted.notification).toContain("Render mode: ghost.");
 	});
 
 	test("uses the launch render-mode flag and preserves autocomplete behavior", async () => {

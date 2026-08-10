@@ -116,9 +116,11 @@ describe("suggestion render mode selection", () => {
 		expect(normalizeRenderMode(" ")).toBeUndefined();
 	});
 
-	test("prefers the CLI flag, then the environment, then widget", () => {
-		expect(configuredRenderMode("ghost", "both")).toBe("ghost");
-		expect(configuredRenderMode(undefined, "both")).toBe("both");
+	test("prefers the CLI flag, environment, saved setting, then widget", () => {
+		expect(configuredRenderMode("ghost", "both", "widget")).toBe("ghost");
+		expect(configuredRenderMode(undefined, "both", "ghost")).toBe("both");
+		expect(configuredRenderMode(undefined, undefined, "ghost")).toBe("ghost");
+		expect(configuredRenderMode(undefined, undefined, "invalid")).toBe("widget");
 		expect(configuredRenderMode(undefined, undefined)).toBe("widget");
 	});
 });

@@ -23,10 +23,12 @@ export function normalizeRenderMode(
 export function configuredRenderMode(
 	cliValue: string | undefined,
 	environmentValue: string | undefined,
+	persistedValue?: string,
 ): SuggestionRenderMode {
 	return (
 		normalizeRenderMode(cliValue) ??
 		normalizeRenderMode(environmentValue) ??
+		normalizeRenderMode(persistedValue) ??
 		"widget"
 	);
 }
