@@ -183,7 +183,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	function acceptSuggestion(ctx: ExtensionContext): boolean {
 		if (!suggestion) return false;
 		const accepted = suggestion;
-		clearSuggestion(ctx);
+		clearSuggestion(ctx, { forgetLast: false });
 		ctx.ui.setEditorText(accepted);
 		return true;
 	}

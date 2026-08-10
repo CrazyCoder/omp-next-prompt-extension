@@ -564,6 +564,42 @@ describe("next-prompt lifecycle", () => {
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
 
+	test("re-arms an accepted ghost after repeated deletion reaches empty", async () => {
+		vi.useFakeTimers();
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.commands.suggestions?.("mode ghost", harness.ctx);
+		const provider = harness.wrapAutocompleteProvider({
+			getSuggestions: async () => null,
+			applyCompletion: () => ({
+				lines: [""],
+				cursorLine: 0,
+				cursorCol: 0,
+			}),
+			getInlineHint: () => null,
+		} satisfies AutocompleteProvider);
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+
+		expect(harness.terminalInput?.("\x1b[C")).toEqual({ consume: true });
+		expect(harness.editorText).toBe("run the focused tests");
+
+		for (let remaining = harness.editorText; remaining.length > 0; ) {
+			harness.terminalInput?.("\x7f");
+			remaining = remaining.slice(0, -1);
+			harness.editorText = remaining;
+		}
+		harness.terminalInput?.("\x7f");
+		vi.advanceTimersByTime(2_050);
+
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+	});
+
 	test("reports why no suggestion was shown", async () => {
 		completeSimple.mockImplementation(async () => suggestionResponse("NONE"));
 		const harness = createHarness();
