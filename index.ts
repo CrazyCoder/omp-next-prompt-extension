@@ -1,5 +1,6 @@
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { matchesKey } from "@oh-my-pi/pi-tui";
 
 import {
 	buildSuggestionContext,
@@ -79,6 +80,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	let generation = 0;
 	let generationAbort: AbortController | undefined;
 	let editorCheckTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingEditorHadText = false;
 	let rearmTimer: ReturnType<typeof setTimeout> | undefined;
 	let unsubscribeTerminalInput: (() => void) | undefined;
 	let lastOutcome = "not generated yet";
@@ -117,9 +119,10 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		generation += 1;
 		suggestion = undefined;
 		renderSuggestion(ctx);
-		if (editorCheckTimer) clearTimeout(editorCheckTimer);
-		if (rearmTimer) clearTimeout(rearmTimer);
+		clearTimeout(editorCheckTimer);
+		clearTimeout(rearmTimer);
 		editorCheckTimer = undefined;
+		pendingEditorHadText = false;
 		rearmTimer = undefined;
 		if (forgetLast) lastSuggestion = undefined;
 		if (abortGeneration) {
@@ -158,11 +161,14 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		ctx: ExtensionContext,
 		editorTextBefore: string,
 	): void {
-		if (editorCheckTimer) clearTimeout(editorCheckTimer);
+		pendingEditorHadText ||= editorTextBefore.length > 0;
+		clearTimeout(editorCheckTimer);
 		editorCheckTimer = setTimeout(() => {
 			editorCheckTimer = undefined;
+			const editorHadText = pendingEditorHadText;
+			pendingEditorHadText = false;
 			const editorTextAfter = ctx.ui.getEditorText();
-			if (editorTextBefore.length === 0) {
+			if (!editorHadText) {
 				if (editorTextAfter.length === 0) return;
 				const outcome = generationAbort
 					? "aborted: editor changed"
@@ -179,7 +185,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			)
 				return;
 			const cached = lastSuggestion;
-			if (rearmTimer) clearTimeout(rearmTimer);
+			clearTimeout(rearmTimer);
 			rearmTimer = setTimeout(() => {
 				rearmTimer = undefined;
 				if (
@@ -345,6 +351,15 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		}
 		unsubscribeTerminalInput?.();
 		unsubscribeTerminalInput = ctx.ui.onTerminalInput((data) => {
+			const editorTextBefore = ctx.ui.getEditorText();
+			if (
+				suggestion &&
+				(renderMode === "ghost" || renderMode === "both") &&
+				editorTextBefore.length === 0 &&
+				matchesKey(data, "right")
+			) {
+				return acceptSuggestion(ctx) ? { consume: true } : undefined;
+			}
 			if (ACCEPT_INPUTS[data]) {
 				return acceptSuggestion(ctx) ? { consume: true } : undefined;
 			}
@@ -353,7 +368,6 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 				isKnownNonEditingInput(data)
 			)
 				return undefined;
-			const editorTextBefore = ctx.ui.getEditorText();
 			if (editorTextBefore.length === 0) {
 				scheduleEditorCheck(ctx, editorTextBefore);
 				return undefined;

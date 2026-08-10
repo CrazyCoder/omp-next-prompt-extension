@@ -14,10 +14,11 @@ The render modes are:
 - `ghost`: dim inline text after the editor cursor
 - `both`: the widget and inline ghost together
 
-- **Alt+/** inserts the suggestion into the editor without submitting it.
-- Focus, mouse, modifier, and navigation input leaves the suggestion visible.
+- **Alt+/** inserts any visible suggestion into the editor without submitting it.
+- **Right Arrow** also accepts an inline ghost while the editor is empty.
+- Focus, mouse, modifier, and other navigation input leaves the suggestion visible.
 - Typing or pasting dismisses the suggestion and aborts any in-flight request.
-- Deleting the prompt back to empty re-shows the cached suggestion after two seconds without another model request.
+- Deleting the prompt back to empty re-shows the cached suggestion after two seconds without another model request, including after repeated Backspace input.
 - Suggestions are disabled in headless sessions and while OMP will continue automatically.
 
 ## Install

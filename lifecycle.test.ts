@@ -269,6 +269,27 @@ describe("next-prompt lifecycle", () => {
 		}
 	});
 
+	test("accepts an inline ghost with Right Arrow", async () => {
+		for (const mode of ["ghost", "both"]) {
+			for (const input of ["\x1b[C", "\x1bOC", "\x1b[1;1C"]) {
+				const harness = createHarness();
+				await harness.handlers.session_start?.({}, harness.ctx);
+				await harness.handlers.agent_end?.(
+					{ messages: conversationMessages() },
+					harness.ctx,
+				);
+
+				expect(harness.terminalInput?.(input)).toBeUndefined();
+				expect(harness.editorText).toBe("");
+
+				await harness.commands.suggestions?.(`mode ${mode}`, harness.ctx);
+				expect(harness.terminalInput?.(input)).toEqual({ consume: true });
+				expect(harness.editorText).toBe("run the focused tests");
+				expect(harness.widget).toBeUndefined();
+			}
+		}
+	});
+
 	test("switches between widget, ghost, and both without re-registering", async () => {
 		const harness = createHarness();
 		await harness.handlers.session_start?.({}, harness.ctx);
@@ -452,12 +473,53 @@ describe("next-prompt lifecycle", () => {
 
 		harness.terminalInput?.("\x7f");
 		harness.editorText = "";
+		harness.terminalInput?.("\x7f");
 		vi.advanceTimersByTime(2_049);
 		expect(harness.widget).toBeUndefined();
 		vi.advanceTimersByTime(1);
 		expect(harness.widget).toEqual([
 			"↳ next: run the focused tests  (Alt+/ to accept)",
 		]);
+		expect(completeSimple).toHaveBeenCalledTimes(1);
+	});
+
+	test("re-arms an inline ghost after repeated deletion reaches empty", async () => {
+		vi.useFakeTimers();
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.commands.suggestions?.("mode ghost", harness.ctx);
+		const provider = harness.wrapAutocompleteProvider({
+			getSuggestions: async () => null,
+			applyCompletion: () => ({
+				lines: [""],
+				cursorLine: 0,
+				cursorCol: 0,
+			}),
+			getInlineHint: () => null,
+		} satisfies AutocompleteProvider);
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+
+		harness.terminalInput?.("x");
+		harness.editorText = "x";
+		vi.advanceTimersByTime(50);
+		expect(provider.getInlineHint?.(["x"], 0, 1)).toBeNull();
+
+		harness.terminalInput?.("\x7f");
+		harness.editorText = "";
+		harness.terminalInput?.("\x7f");
+		vi.advanceTimersByTime(2_050);
+
+		expect(harness.widget).toBeUndefined();
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+		const editor = new CustomEditor(getEditorTheme());
+		editor.focused = true;
+		editor.setAutocompleteProvider(provider);
+		expect(editor.render(80).join("\n")).toContain("run the focused tests");
 		expect(completeSimple).toHaveBeenCalledTimes(1);
 	});
 
