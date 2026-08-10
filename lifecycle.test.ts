@@ -286,26 +286,38 @@ describe("next-prompt lifecycle", () => {
 		}
 	});
 
-	test("accepts an inline ghost with Right Arrow", async () => {
-		for (const mode of ["ghost", "both"]) {
+	test("accepts a visible suggestion with Right Arrow in every render mode", async () => {
+		for (const mode of ["widget", "ghost", "both"]) {
 			for (const input of ["\x1b[C", "\x1bOC", "\x1b[1;1C"]) {
-				pluginSettings.renderMode = "widget";
+				pluginSettings.renderMode = mode;
 				const harness = createHarness();
 				await harness.handlers.session_start?.({}, harness.ctx);
+				expect(harness.terminalInput?.(input)).toBeUndefined();
 				await harness.handlers.agent_end?.(
 					{ messages: conversationMessages() },
 					harness.ctx,
 				);
 
-				expect(harness.terminalInput?.(input)).toBeUndefined();
-				expect(harness.editorText).toBe("");
-
-				await harness.commands.suggestions?.(`mode ${mode}`, harness.ctx);
+				harness.editorText = "";
 				expect(harness.terminalInput?.(input)).toEqual({ consume: true });
 				expect(harness.editorText).toBe("run the focused tests");
 				expect(harness.widget).toBeUndefined();
 			}
 		}
+	});
+
+	test("leaves Right Arrow to the editor when the prompt has text", async () => {
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+
+		harness.editorText = "x";
+		expect(harness.terminalInput?.("\x1b[C")).toBeUndefined();
+		expect(harness.editorText).toBe("x");
+		expect(harness.widget).toBeUndefined();
 	});
 
 	test("switches between widget, ghost, and both without re-registering", async () => {

@@ -415,7 +415,6 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			const editorTextBefore = ctx.ui.getEditorText();
 			if (
 				suggestion &&
-				(renderMode === "ghost" || renderMode === "both") &&
 				editorTextBefore.length === 0 &&
 				matchesKey(data, "right")
 			) {
