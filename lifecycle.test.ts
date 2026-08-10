@@ -1,5 +1,6 @@
 import {
 	afterEach,
+	beforeAll,
 	beforeEach,
 	describe,
 	expect,
@@ -7,7 +8,13 @@ import {
 	test,
 	vi,
 } from "bun:test";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import {
+	type AutocompleteProviderFactory,
+	CustomEditor,
+	type ExtensionAPI,
+	getEditorTheme,
+	initTheme,
+} from "@oh-my-pi/pi-coding-agent";
 
 interface SuggestionResponse {
 	stopReason: "stop";
@@ -36,6 +43,7 @@ type EventHandler = (
 ) => Promise<void>;
 type TerminalInputHandler = (data: string) => unknown;
 type CommandHandler = (args: string, ctx: unknown) => Promise<void>;
+type AutocompleteProvider = Parameters<AutocompleteProviderFactory>[0];
 
 interface RegisteredShortcut {
 	key: string;
@@ -76,6 +84,9 @@ function createHarness() {
 	const handlers: Record<string, EventHandler> = {};
 	const commands: Record<string, CommandHandler> = {};
 	let terminalInput: TerminalInputHandler | undefined;
+	let autocompleteProviderFactory: AutocompleteProviderFactory | undefined;
+	let autocompleteProviderRegistrations = 0;
+	const flags: Record<string, string | undefined> = {};
 	let pendingMessages = false;
 	let idle = true;
 	let widget: unknown;
@@ -121,11 +132,15 @@ function createHarness() {
 			notify: (message: string) => {
 				notification = message;
 			},
+			addAutocompleteProvider: (factory: AutocompleteProviderFactory) => {
+				autocompleteProviderFactory = factory;
+				autocompleteProviderRegistrations += 1;
+			},
 		},
 	};
 	const pi = {
 		registerFlag: () => {},
-		getFlag: () => undefined,
+		getFlag: (name: string) => flags[name],
 		setLabel: () => {},
 		registerShortcut: (
 			key: string,
@@ -179,9 +194,24 @@ function createHarness() {
 		set idle(value: boolean) {
 			idle = value;
 		},
+		get autocompleteProviderRegistrations() {
+			return autocompleteProviderRegistrations;
+		},
+		wrapAutocompleteProvider(current: AutocompleteProvider) {
+			if (!autocompleteProviderFactory)
+				throw new Error("Autocomplete provider was not registered");
+			return autocompleteProviderFactory(current);
+		},
+		setFlag(name: string, value: string) {
+			flags[name] = value;
+		},
 	};
 }
 
+
+beforeAll(async () => {
+	await initTheme();
+});
 beforeEach(() => {
 	completeSimple.mockClear();
 	completeSimple.mockImplementation(async () =>
@@ -218,6 +248,106 @@ describe("next-prompt lifecycle", () => {
 		harness.shortcut?.handler(harness.ctx);
 		expect(harness.editorText).toBe("run the focused tests");
 		expect(harness.widget).toBeUndefined();
+	});
+
+	test("switches between widget, ghost, and both without re-registering", async () => {
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		await harness.handlers.session_start?.({}, harness.ctx);
+		expect(harness.autocompleteProviderRegistrations).toBe(1);
+
+		const baseProvider = {
+			getSuggestions: async () => null,
+			applyCompletion: () => ({
+				lines: [""],
+				cursorLine: 0,
+				cursorCol: 0,
+			}),
+			getInlineHint: () => "built-in hint",
+		} satisfies AutocompleteProvider;
+		const provider = harness.wrapAutocompleteProvider(baseProvider);
+
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+		expect(harness.widget).toEqual([
+			"↳ next: run the focused tests  (Alt+/ to accept)",
+		]);
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe("built-in hint");
+
+		await harness.commands.suggestions?.("mode ghost", harness.ctx);
+		expect(harness.widget).toBeUndefined();
+		const editor = new CustomEditor(getEditorTheme());
+		editor.focused = true;
+		editor.setAutocompleteProvider(provider);
+		expect(editor.render(80).join("\n")).toContain("run the focused tests");
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+		expect(provider.getInlineHint?.(["typed"], 0, 5)).toBe("built-in hint");
+
+		await harness.commands.suggestions?.("mode both", harness.ctx);
+		expect(harness.widget).toEqual([
+			"↳ next: run the focused tests  (Alt+/ to accept)",
+		]);
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+	});
+
+	test("uses the launch render-mode flag and preserves autocomplete behavior", async () => {
+		const harness = createHarness();
+		harness.setFlag("suggestions-render-mode", "ghost");
+		await harness.handlers.session_start?.({}, harness.ctx);
+
+		const getSuggestions = vi.fn(async () => null);
+		const applyCompletion = vi.fn(() => ({
+			lines: ["completed"],
+			cursorLine: 0,
+			cursorCol: 9,
+		}));
+		const trySyncSlashCompletion = vi.fn(() => null);
+		const trySyncInlineReplace = vi.fn(() => null);
+		const getForceFileSuggestions = vi.fn(async () => null);
+		const shouldTriggerFileCompletion = vi.fn(() => true);
+		const provider = harness.wrapAutocompleteProvider({
+			getSuggestions,
+			applyCompletion,
+			getInlineHint: () => null,
+			trySyncSlashCompletion,
+			trySyncInlineReplace,
+			getForceFileSuggestions,
+			shouldTriggerFileCompletion,
+		});
+
+		await provider.getSuggestions([""], 0, 0);
+		provider.applyCompletion(
+			[""],
+			0,
+			0,
+			{ value: "completed", label: "completed" },
+			"",
+		);
+		provider.trySyncSlashCompletion?.("/");
+		provider.trySyncInlineReplace?.("test");
+		await provider.getForceFileSuggestions?.([""], 0, 0);
+		provider.shouldTriggerFileCompletion?.([""], 0, 0);
+		expect(getSuggestions).toHaveBeenCalledTimes(1);
+		expect(applyCompletion).toHaveBeenCalledTimes(1);
+		expect(trySyncSlashCompletion).toHaveBeenCalledTimes(1);
+		expect(trySyncInlineReplace).toHaveBeenCalledTimes(1);
+		expect(getForceFileSuggestions).toHaveBeenCalledTimes(1);
+		expect(shouldTriggerFileCompletion).toHaveBeenCalledTimes(1);
+
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+		expect(harness.widget).toBeUndefined();
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
 	});
 
 	test("suppresses continuation and pending-message settles", async () => {

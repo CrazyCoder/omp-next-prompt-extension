@@ -4,15 +4,20 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
 	buildSuggestionContext,
 	configuredModelSpec,
+	configuredRenderMode,
 	contentText,
 	normalizeModelSpec,
+	normalizeRenderMode,
 	normalizeSuggestion,
+	type SuggestionRenderMode,
 } from "./logic";
 
 const WIDGET_KEY = "next-prompt-suggestion";
 const ACCEPT_SHORTCUT = "alt+/";
 const MODEL_FLAG = "suggestions-model";
 const MODEL_ENVIRONMENT_VARIABLE = "OMP_SUGGESTIONS_MODEL";
+const RENDER_MODE_FLAG = "suggestions-render-mode";
+const RENDER_MODE_ENVIRONMENT_VARIABLE = "OMP_SUGGESTIONS_RENDER_MODE";
 const ACCEPT_INPUTS: Record<string, true> = {
 	"\x1b/": true,
 	"\x1bO/": true,
@@ -58,10 +63,16 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			"Model for next-prompt suggestions (smol, slow, current, @role, or provider/model)",
 		type: "string",
 	});
+	pi.registerFlag(RENDER_MODE_FLAG, {
+		description: "Next-prompt rendering (widget, ghost, or both)",
+		type: "string",
+	});
 
 	let enabled = true;
 	let defaultModelSpec = "@smol";
 	let modelSpec = defaultModelSpec;
+	let defaultRenderMode: SuggestionRenderMode = "widget";
+	let renderMode: SuggestionRenderMode = defaultRenderMode;
 	let suggestion: string | undefined;
 	let lastSuggestion: string | undefined;
 	let generation = 0;
@@ -70,8 +81,24 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	let rearmTimer: ReturnType<typeof setTimeout> | undefined;
 	let unsubscribeTerminalInput: (() => void) | undefined;
 	let lastOutcome = "not generated yet";
+	let autocompleteProviderInstalled = false;
 
 	pi.setLabel("Next-prompt suggestions");
+
+	function renderSuggestion(ctx: ExtensionContext): void {
+		const showWidget =
+			suggestion !== undefined &&
+			(renderMode === "widget" || renderMode === "both");
+		ctx.ui.setWidget(
+			WIDGET_KEY,
+			showWidget
+				? [
+						`${ctx.ui.theme.fg("accent", "↳ next:")} ${suggestion}  ${ctx.ui.theme.fg("muted", "(Alt+/ to accept)")}`,
+					]
+				: undefined,
+			{ placement: "belowEditor" },
+		);
+	}
 
 	function clearSuggestion(
 		ctx: ExtensionContext,
@@ -88,7 +115,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		} = options;
 		generation += 1;
 		suggestion = undefined;
-		ctx.ui.setWidget(WIDGET_KEY, undefined);
+		renderSuggestion(ctx);
 		if (editorCheckTimer) clearTimeout(editorCheckTimer);
 		if (rearmTimer) clearTimeout(rearmTimer);
 		editorCheckTimer = undefined;
@@ -105,13 +132,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		suggestion = value;
 		lastSuggestion = value;
 		lastOutcome = `shown: ${value}`;
-		ctx.ui.setWidget(
-			WIDGET_KEY,
-			[
-				`${ctx.ui.theme.fg("accent", "↳ next:")} ${value}  ${ctx.ui.theme.fg("muted", "(Alt+/ to accept)")}`,
-			],
-			{ placement: "belowEditor" },
-		);
+		renderSuggestion(ctx);
 	}
 
 	function isKnownNonEditingInput(data: string): boolean {
@@ -176,7 +197,8 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("suggestions", {
-		description: "Control next-prompt suggestions (on|off|status|model)",
+		description:
+			"Control next-prompt suggestions (on|off|status|model|mode)",
 		handler: async (args, ctx) => {
 			const input = args.trim();
 			const [rawAction = "", ...remainder] = input.split(/\s+/);
@@ -194,7 +216,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			}
 			if (action === "status") {
 				ctx.ui.notify(
-					`Next-prompt suggestions are ${enabled ? "enabled" : "disabled"}. Model: ${modelSpec}. Last outcome: ${lastOutcome}.`,
+					`Next-prompt suggestions are ${enabled ? "enabled" : "disabled"}. Model: ${modelSpec}. Render mode: ${renderMode}. Last outcome: ${lastOutcome}.`,
 					"info",
 				);
 				return;
@@ -227,8 +249,30 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(`Suggestion model set to ${modelSpec}.`, "info");
 				return;
 			}
+			if (action === "mode") {
+				const modeArgument = remainder.join(" ");
+				if (!modeArgument) {
+					ctx.ui.notify(`Suggestion render mode: ${renderMode}.`, "info");
+					return;
+				}
+				const requested = normalizeRenderMode(modeArgument);
+				if (!requested) {
+					ctx.ui.notify(
+						`Suggestion render mode "${modeArgument}" is unavailable.`,
+						"warning",
+					);
+					return;
+				}
+				renderMode = requested;
+				renderSuggestion(ctx);
+				ctx.ui.notify(
+					`Suggestion render mode set to ${renderMode}.`,
+					"info",
+				);
+				return;
+			}
 			ctx.ui.notify(
-				"Usage: /suggestions on|off|status|model [smol|slow|current|@role|provider/model|reset]",
+				"Usage: /suggestions on|off|status|model [smol|slow|current|@role|provider/model|reset]|mode [widget|ghost|both]",
 				"warning",
 			);
 		},
@@ -241,6 +285,58 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			process.env[MODEL_ENVIRONMENT_VARIABLE],
 		);
 		modelSpec = defaultModelSpec;
+		const renderFlagValue = pi.getFlag(RENDER_MODE_FLAG);
+		defaultRenderMode = configuredRenderMode(
+			typeof renderFlagValue === "string" ? renderFlagValue : undefined,
+			process.env[RENDER_MODE_ENVIRONMENT_VARIABLE],
+		);
+		renderMode = defaultRenderMode;
+		if (!autocompleteProviderInstalled) {
+			ctx.ui.addAutocompleteProvider((current) => ({
+				getSuggestions: current.getSuggestions.bind(current),
+				applyCompletion: current.applyCompletion.bind(current),
+				getInlineHint: (lines, cursorLine, cursorCol) => {
+					const ghostSuggestion = suggestion;
+					if (
+						ghostSuggestion !== undefined &&
+						(renderMode === "ghost" || renderMode === "both") &&
+						lines.length === 1 &&
+						lines[0] === "" &&
+						cursorLine === 0 &&
+						cursorCol === 0
+					)
+						return ghostSuggestion;
+					return (
+						current.getInlineHint?.(lines, cursorLine, cursorCol) ?? null
+					);
+				},
+				...(current.trySyncSlashCompletion
+					? {
+							trySyncSlashCompletion:
+								current.trySyncSlashCompletion.bind(current),
+						}
+					: {}),
+				...(current.trySyncInlineReplace
+					? {
+							trySyncInlineReplace:
+								current.trySyncInlineReplace.bind(current),
+						}
+					: {}),
+				...(current.getForceFileSuggestions
+					? {
+							getForceFileSuggestions:
+								current.getForceFileSuggestions.bind(current),
+						}
+					: {}),
+				...(current.shouldTriggerFileCompletion
+					? {
+							shouldTriggerFileCompletion:
+								current.shouldTriggerFileCompletion.bind(current),
+						}
+					: {}),
+			}));
+			autocompleteProviderInstalled = true;
+		}
 		unsubscribeTerminalInput?.();
 		unsubscribeTerminalInput = ctx.ui.onTerminalInput((data) => {
 			if (

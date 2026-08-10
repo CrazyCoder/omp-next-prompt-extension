@@ -3,7 +3,9 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildSuggestionContext,
 	configuredModelSpec,
+	configuredRenderMode,
 	normalizeModelSpec,
+	normalizeRenderMode,
 	normalizeSuggestion,
 } from "./logic";
 
@@ -102,5 +104,21 @@ describe("suggestion model selection", () => {
 		expect(configuredModelSpec("@slow", "current")).toBe("@slow");
 		expect(configuredModelSpec(undefined, "slow")).toBe("@slow");
 		expect(configuredModelSpec(undefined, undefined)).toBe("@smol");
+	});
+});
+
+describe("suggestion render mode selection", () => {
+	test("accepts supported modes case-insensitively", () => {
+		expect(normalizeRenderMode(" widget ")).toBe("widget");
+		expect(normalizeRenderMode("GHOST")).toBe("ghost");
+		expect(normalizeRenderMode("both")).toBe("both");
+		expect(normalizeRenderMode("inline")).toBeUndefined();
+		expect(normalizeRenderMode(" ")).toBeUndefined();
+	});
+
+	test("prefers the CLI flag, then the environment, then widget", () => {
+		expect(configuredRenderMode("ghost", "both")).toBe("ghost");
+		expect(configuredRenderMode(undefined, "both")).toBe("both");
+		expect(configuredRenderMode(undefined, undefined)).toBe("widget");
 	});
 });

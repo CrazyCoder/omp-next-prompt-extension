@@ -10,6 +10,27 @@ const MODEL_LEVELS: Record<string, string> = {
 	slow: "@slow",
 };
 
+export const SUGGESTION_RENDER_MODES = ["widget", "ghost", "both"] as const;
+export type SuggestionRenderMode = (typeof SUGGESTION_RENDER_MODES)[number];
+
+export function normalizeRenderMode(
+	value: string | undefined,
+): SuggestionRenderMode | undefined {
+	const mode = value?.trim().toLowerCase();
+	return SUGGESTION_RENDER_MODES.find((candidate) => candidate === mode);
+}
+
+export function configuredRenderMode(
+	cliValue: string | undefined,
+	environmentValue: string | undefined,
+): SuggestionRenderMode {
+	return (
+		normalizeRenderMode(cliValue) ??
+		normalizeRenderMode(environmentValue) ??
+		"widget"
+	);
+}
+
 export function normalizeModelSpec(
 	value: string | undefined,
 ): string | undefined {
