@@ -224,7 +224,7 @@ afterEach(() => {
 });
 
 describe("next-prompt lifecycle", () => {
-	test("registers Alt+/ and accepts all supported terminal encodings", async () => {
+	test("registers Alt+/ and accepts the suggestion through the shortcut", async () => {
 		const harness = createHarness();
 		await harness.handlers.session_start?.({}, harness.ctx);
 		await harness.handlers.agent_end?.(
@@ -233,21 +233,40 @@ describe("next-prompt lifecycle", () => {
 		);
 
 		expect(harness.shortcut?.key).toBe("alt+/");
-		for (const input of ["\x1b/", "\x1bO/", "\x1b[47;3u"]) {
-			harness.terminalInput?.(input);
-			expect(harness.widget).toEqual([
-				"↳ next: run the focused tests  (Alt+/ to accept)",
-			]);
-			expect(harness.themeCalls).toContainEqual(["accent", "↳ next:"]);
-			expect(harness.themeCalls).toContainEqual([
-				"muted",
-				"(Alt+/ to accept)",
-			]);
-		}
+		expect(harness.widget).toEqual([
+			"↳ next: run the focused tests  (Alt+/ to accept)",
+		]);
+		expect(harness.themeCalls).toContainEqual(["accent", "↳ next:"]);
+		expect(harness.themeCalls).toContainEqual([
+			"muted",
+			"(Alt+/ to accept)",
+		]);
 
 		harness.shortcut?.handler(harness.ctx);
 		expect(harness.editorText).toBe("run the focused tests");
 		expect(harness.widget).toBeUndefined();
+	});
+
+	test("accepts all supported Alt+/ terminal encodings", async () => {
+		for (const input of [
+			"\x1b/",
+			"\x1bO/",
+			"\x1b[47;3u",
+			"\x1b[27;3;47~",
+		]) {
+			const harness = createHarness();
+			await harness.handlers.session_start?.({}, harness.ctx);
+			expect(harness.terminalInput?.(input)).toBeUndefined();
+
+			await harness.handlers.agent_end?.(
+				{ messages: conversationMessages() },
+				harness.ctx,
+			);
+
+			expect(harness.terminalInput?.(input)).toEqual({ consume: true });
+			expect(harness.editorText).toBe("run the focused tests");
+			expect(harness.widget).toBeUndefined();
+		}
 	});
 
 	test("switches between widget, ghost, and both without re-registering", async () => {

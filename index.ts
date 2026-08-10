@@ -22,6 +22,7 @@ const ACCEPT_INPUTS: Record<string, true> = {
 	"\x1b/": true,
 	"\x1bO/": true,
 	"\x1b[47;3u": true,
+	"\x1b[27;3;47~": true,
 };
 const GENERATION_TIMEOUT_MS = 20_000;
 const EDITOR_SETTLE_MS = 50;
@@ -135,6 +136,14 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		renderSuggestion(ctx);
 	}
 
+	function acceptSuggestion(ctx: ExtensionContext): boolean {
+		if (!suggestion) return false;
+		const accepted = suggestion;
+		clearSuggestion(ctx);
+		ctx.ui.setEditorText(accepted);
+		return true;
+	}
+
 	function isKnownNonEditingInput(data: string): boolean {
 		return (
 			data === "\x1b[I" ||
@@ -189,10 +198,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 	pi.registerShortcut(ACCEPT_SHORTCUT, {
 		description: "Accept next-prompt suggestion",
 		handler: (ctx) => {
-			if (!suggestion) return;
-			const accepted = suggestion;
-			clearSuggestion(ctx);
-			ctx.ui.setEditorText(accepted);
+			acceptSuggestion(ctx);
 		},
 	});
 
@@ -339,9 +345,11 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		}
 		unsubscribeTerminalInput?.();
 		unsubscribeTerminalInput = ctx.ui.onTerminalInput((data) => {
+			if (ACCEPT_INPUTS[data]) {
+				return acceptSuggestion(ctx) ? { consume: true } : undefined;
+			}
 			if (
 				(!suggestion && !generationAbort && !lastSuggestion) ||
-				ACCEPT_INPUTS[data] ||
 				isKnownNonEditingInput(data)
 			)
 				return undefined;
