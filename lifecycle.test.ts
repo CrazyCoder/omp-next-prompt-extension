@@ -351,6 +351,35 @@ describe("next-prompt lifecycle", () => {
 		expect(harness.editorText).toBe("run the focused tests");
 	});
 
+	test("reattaches Right Arrow whenever a ghost suggestion is shown", async () => {
+		pluginSettings.renderMode = "ghost";
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		const provider = harness.wrapAutocompleteProvider({
+			getSuggestions: async () => null,
+			applyCompletion: () => ({
+				lines: [""],
+				cursorLine: 0,
+				cursorCol: 0,
+			}),
+			getInlineHint: () => "built-in hint",
+		} satisfies AutocompleteProvider);
+
+		harness.clearTerminalInput();
+		expect(harness.terminalInput).toBeUndefined();
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+		expect(harness.terminalInput).toBeDefined();
+		expect(harness.terminalInput?.("\x1b[C")).toEqual({ consume: true });
+		expect(harness.editorText).toBe("run the focused tests");
+	});
+
 	test("leaves Right Arrow to the editor when the prompt has text", async () => {
 		const harness = createHarness();
 		await harness.handlers.session_start?.({}, harness.ctx);

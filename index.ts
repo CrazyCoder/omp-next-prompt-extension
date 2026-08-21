@@ -177,6 +177,7 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		suggestion = value;
 		lastSuggestion = value;
 		lastOutcome = `shown: ${value}`;
+		installTerminalInput(ctx);
 		renderSuggestion(ctx);
 	}
 
