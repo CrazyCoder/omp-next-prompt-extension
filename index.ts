@@ -242,6 +242,40 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 		}, EDITOR_SETTLE_MS);
 	}
 
+	function installTerminalInput(ctx: ExtensionContext): void {
+		unsubscribeTerminalInput?.();
+		unsubscribeTerminalInput = ctx.ui.onTerminalInput((data) => {
+			const editorTextBefore = ctx.ui.getEditorText();
+			if (
+				suggestion &&
+				editorTextBefore.length === 0 &&
+				matchesKey(data, "right")
+			) {
+				return acceptSuggestion(ctx) ? { consume: true } : undefined;
+			}
+			if (ACCEPT_INPUTS[data]) {
+				return acceptSuggestion(ctx) ? { consume: true } : undefined;
+			}
+			if (
+				(!suggestion && !generationAbort && !lastSuggestion) ||
+				isKnownNonEditingInput(data)
+			)
+				return undefined;
+			if (editorTextBefore.length === 0) {
+				scheduleEditorCheck(ctx, editorTextBefore);
+				return undefined;
+			}
+			clearSuggestion(ctx, {
+				forgetLast: false,
+				outcome: generationAbort
+					? "aborted: editor changed"
+					: "dismissed: editor changed",
+			});
+			scheduleEditorCheck(ctx, editorTextBefore);
+			return undefined;
+		});
+	}
+
 	pi.registerShortcut(ACCEPT_SHORTCUT, {
 		description: "Accept next-prompt suggestion",
 		handler: (ctx) => {
@@ -410,37 +444,12 @@ export default function nextPromptExtension(pi: ExtensionAPI): void {
 			}));
 			autocompleteProviderInstalled = true;
 		}
-		unsubscribeTerminalInput?.();
-		unsubscribeTerminalInput = ctx.ui.onTerminalInput((data) => {
-			const editorTextBefore = ctx.ui.getEditorText();
-			if (
-				suggestion &&
-				editorTextBefore.length === 0 &&
-				matchesKey(data, "right")
-			) {
-				return acceptSuggestion(ctx) ? { consume: true } : undefined;
-			}
-			if (ACCEPT_INPUTS[data]) {
-				return acceptSuggestion(ctx) ? { consume: true } : undefined;
-			}
-			if (
-				(!suggestion && !generationAbort && !lastSuggestion) ||
-				isKnownNonEditingInput(data)
-			)
-				return undefined;
-			if (editorTextBefore.length === 0) {
-				scheduleEditorCheck(ctx, editorTextBefore);
-				return undefined;
-			}
-			clearSuggestion(ctx, {
-				forgetLast: false,
-				outcome: generationAbort
-					? "aborted: editor changed"
-					: "dismissed: editor changed",
-			});
-			scheduleEditorCheck(ctx, editorTextBefore);
-			return undefined;
-		});
+		installTerminalInput(ctx);
+	});
+
+	pi.on("session_switch", async (_event, ctx) => {
+		clearSuggestion(ctx);
+		installTerminalInput(ctx);
 	});
 
 	pi.on("agent_start", async (_event, ctx) => {

@@ -217,6 +217,9 @@ function createHarness() {
 				throw new Error("Autocomplete provider was not registered");
 			return autocompleteProviderFactory(current);
 		},
+		clearTerminalInput() {
+			terminalInput = undefined;
+		},
 		setFlag(name: string, value: string) {
 			flags[name] = value;
 		},
@@ -304,6 +307,48 @@ describe("next-prompt lifecycle", () => {
 				expect(harness.widget).toBeUndefined();
 			}
 		}
+	});
+
+	test("restores ghost Right Arrow acceptance after a session switch", async () => {
+		pluginSettings.renderMode = "ghost";
+		const harness = createHarness();
+		await harness.handlers.session_start?.({}, harness.ctx);
+		const provider = harness.wrapAutocompleteProvider({
+			getSuggestions: async () => null,
+			applyCompletion: () => ({
+				lines: [""],
+				cursorLine: 0,
+				cursorCol: 0,
+			}),
+			getInlineHint: () => "built-in hint",
+		} satisfies AutocompleteProvider);
+
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+
+		harness.clearTerminalInput();
+		expect(harness.terminalInput).toBeUndefined();
+		await harness.handlers.session_switch?.(
+			{ reason: "new", previousSessionFile: "previous.json" },
+			harness.ctx,
+		);
+		expect(harness.terminalInput).toBeDefined();
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe("built-in hint");
+
+		await harness.handlers.agent_end?.(
+			{ messages: conversationMessages() },
+			harness.ctx,
+		);
+		expect(provider.getInlineHint?.([""], 0, 0)).toBe(
+			"run the focused tests",
+		);
+		expect(harness.terminalInput?.("\x1b[C")).toEqual({ consume: true });
+		expect(harness.editorText).toBe("run the focused tests");
 	});
 
 	test("leaves Right Arrow to the editor when the prompt has text", async () => {
